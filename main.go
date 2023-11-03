@@ -14,6 +14,23 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+var _GR *time.Location
+
+func GreekTimeZone() *time.Location {
+	if _GR == nil {
+		loc, err := time.LoadLocation("Europe/Athens")
+		if err != nil {
+			log.Fatalf("error loading location: %v", err)
+		}
+		_GR = loc
+	}
+	return _GR
+}
+
+func ToDate(t time.Time) time.Time {
+	return time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, GreekTimeZone())
+}
+
 type Params struct {
 	Credentials            string `yaml:"credentials"`
 	SpreadsheetId          string `yaml:"spreadsheet_id"`
@@ -46,13 +63,19 @@ type Payment struct {
 func NewPayment(description string) *Payment {
 	return &Payment{
 		description: description,
-		due:         time.Now(),
+		due:         ToDate(time.Now().In(GreekTimeZone())),
 	}
 }
 
 func (p *Payment) WithDueDate(due time.Time) *Payment {
-	p.due = due
+	p.due = ToDate(due.In(GreekTimeZone()))
 	return p
+}
+
+func (p *Payment) DiffFromNowInDays(now time.Time) int {
+	now = ToDate(now.In(GreekTimeZone()))
+	d := p.due.Sub(now).Hours() / 24
+	return int(d)
 }
 
 func main() {
@@ -161,9 +184,6 @@ func readRecurringPayments(rows [][]interface{}) ([]*Payment, error) {
 }
 
 func readScheduledPayments(rows [][]interface{}) ([]*Payment, error) {
-	// Today
-	//today := time.Now().Format("2006-01-02")
-
 	// find index of current month
 	descriptionIndex := -1
 	dueDateIndex := -1
@@ -205,7 +225,7 @@ func readScheduledPayments(rows [][]interface{}) ([]*Payment, error) {
 			payments = append(payments, NewPayment(row[descriptionIndex].(string)))
 			continue
 		}
-		if _, err = time.Parse("2006-01-02", dueDate); err != nil {
+		if _, err = time.Parse(time.DateOnly, dueDate); err != nil {
 			return nil, fmt.Errorf("failed to parse due date value %s: %v", dueDate, err)
 		}
 		payments = append(payments, NewPayment(row[descriptionIndex].(string)))
