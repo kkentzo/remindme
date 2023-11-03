@@ -38,6 +38,23 @@ func ParseParams(contents []byte) (*Params, error) {
 	return p, nil
 }
 
+type Payment struct {
+	description string
+	due         time.Time
+}
+
+func NewPayment(description string) *Payment {
+	return &Payment{
+		description: description,
+		due:         time.Now(),
+	}
+}
+
+func (p *Payment) WithDueDate(due time.Time) *Payment {
+	p.due = due
+	return p
+}
+
 func main() {
 	if len(os.Args[1:]) != 1 {
 		log.Fatal("Please supply a single argument with the path to the config file")
@@ -70,13 +87,13 @@ func main() {
 		log.Fatalf("[%s] failed to read sheet %s: %v", params.SpreadsheetId, params.MonthlyPaymentsSheet, err)
 	}
 
-	descriptions, err := readMonthlyPayments(sheet)
+	payments, err := readMonthlyPayments(sheet)
 	if err != nil {
 		log.Fatalf("[%s/%s] failed to process monthly payments: %v", params.SpreadsheetId, params.MonthlyPaymentsSheet, err)
 	}
 	fmt.Println("Pending monthly payments; cough it up man 💸 💸 💸")
-	for _, d := range descriptions {
-		fmt.Printf("  - %s\n", d)
+	for _, p := range payments {
+		fmt.Printf("  - %s\n", p.description)
 	}
 
 	// scheduled payments
@@ -85,13 +102,13 @@ func main() {
 		log.Fatalf("[%s] failed to read sheet %s: %v", params.SpreadsheetId, params.ScheduledPaymentsSheet, err)
 	}
 
-	descriptions, err = readScheduledPayments(sheet)
+	payments, err = readScheduledPayments(sheet)
 	if err != nil {
 		log.Fatalf("[%s] failed to read sheet %s: %v", params.SpreadsheetId, params.ScheduledPaymentsSheet, err)
 	}
 	fmt.Println("Pending scheduled payments 💸 💸 💸")
-	for _, d := range descriptions {
-		fmt.Printf("  - %s\n", d)
+	for _, p := range payments {
+		fmt.Printf("  - %s\n", p.description)
 	}
 
 }
@@ -109,7 +126,7 @@ func getSheet(svc *sheets.Service, spreadsheetId, sheetName string) ([][]interfa
 
 }
 
-func readMonthlyPayments(rows [][]interface{}) ([]string, error) {
+func readMonthlyPayments(rows [][]interface{}) ([]*Payment, error) {
 	// what's the current month?
 	month := fmt.Sprintf("%d", time.Now().Month())
 	// find index of current month
@@ -131,19 +148,19 @@ func readMonthlyPayments(rows [][]interface{}) ([]string, error) {
 		return nil, errors.New("description label was not found in sheet header")
 	}
 
-	descriptions := []string{}
+	payments := []*Payment{}
 
 	for _, row := range rows[1:] {
 		// `len(row) <= columnIndex` means that there are values in the row before the
 		// value column of interest -- so for sure, this month is pending
 		if len(row) <= columnIndex || row[columnIndex].(string) == "" {
-			descriptions = append(descriptions, row[descriptionIndex].(string))
+			payments = append(payments, NewPayment(row[descriptionIndex].(string)))
 		}
 	}
-	return descriptions, nil
+	return payments, nil
 }
 
-func readScheduledPayments(rows [][]interface{}) ([]string, error) {
+func readScheduledPayments(rows [][]interface{}) ([]*Payment, error) {
 	// Today
 	//today := time.Now().Format("2006-01-02")
 
@@ -173,7 +190,7 @@ func readScheduledPayments(rows [][]interface{}) ([]string, error) {
 		return nil, errors.New("payment date was not found in sheet header")
 	}
 
-	descriptions := []string{}
+	payments := []*Payment{}
 	var (
 		err error
 	)
@@ -185,13 +202,13 @@ func readScheduledPayments(rows [][]interface{}) ([]string, error) {
 			continue
 		}
 		if dueDate == "" {
-			descriptions = append(descriptions, row[descriptionIndex].(string))
+			payments = append(payments, NewPayment(row[descriptionIndex].(string)))
 			continue
 		}
 		if _, err = time.Parse("2006-01-02", dueDate); err != nil {
 			return nil, fmt.Errorf("failed to parse due date value %s: %v", dueDate, err)
 		}
-		descriptions = append(descriptions, row[descriptionIndex].(string))
+		payments = append(payments, NewPayment(row[descriptionIndex].(string)))
 	}
-	return descriptions, nil
+	return payments, nil
 }
