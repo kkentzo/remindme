@@ -18,7 +18,7 @@ type Params struct {
 	Credentials            string `yaml:"credentials"`
 	SpreadsheetId          string `yaml:"spreadsheet_id"`
 	ScheduledPaymentsSheet string `yaml:"scheduled_payments_sheet"`
-	MonthlyPaymentsSheet   string `yaml:"monthly_payments_sheet"`
+	RecurringPaymentsSheet string `yaml:"recurring_payments_sheet"`
 }
 
 func ReadParamsFile(path string) (contents []byte, err error) {
@@ -81,17 +81,17 @@ func main() {
 		log.Fatalf("Unable to retrieve Sheets Client: %v", err)
 	}
 
-	// monthly payments
-	sheet, err := getSheet(svc, params.SpreadsheetId, params.MonthlyPaymentsSheet)
+	// recurring payments
+	sheet, err := getSheet(svc, params.SpreadsheetId, params.RecurringPaymentsSheet)
 	if err != nil {
-		log.Fatalf("[%s] failed to read sheet %s: %v", params.SpreadsheetId, params.MonthlyPaymentsSheet, err)
+		log.Fatalf("[%s] failed to read sheet %s: %v", params.SpreadsheetId, params.RecurringPaymentsSheet, err)
 	}
 
-	payments, err := readMonthlyPayments(sheet)
+	payments, err := readRecurringPayments(sheet)
 	if err != nil {
-		log.Fatalf("[%s/%s] failed to process monthly payments: %v", params.SpreadsheetId, params.MonthlyPaymentsSheet, err)
+		log.Fatalf("[%s/%s] failed to process recurring payments: %v", params.SpreadsheetId, params.RecurringPaymentsSheet, err)
 	}
-	fmt.Println("Pending monthly payments; cough it up man 💸 💸 💸")
+	fmt.Println("Pending recurring payments; cough it up man 💸 💸 💸")
 	for _, p := range payments {
 		fmt.Printf("  - %s\n", p.description)
 	}
@@ -126,7 +126,7 @@ func getSheet(svc *sheets.Service, spreadsheetId, sheetName string) ([][]interfa
 
 }
 
-func readMonthlyPayments(rows [][]interface{}) ([]*Payment, error) {
+func readRecurringPayments(rows [][]interface{}) ([]*Payment, error) {
 	// what's the current month?
 	month := fmt.Sprintf("%d", time.Now().Month())
 	// find index of current month
