@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"io/ioutil"
 	"log"
+	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"golang.org/x/oauth2"
@@ -32,6 +34,7 @@ func ToDate(t time.Time) time.Time {
 }
 
 type Params struct {
+	NotificationTopic      string `yaml:"ntfy_topic"`
 	Credentials            string `yaml:"credentials"`
 	SpreadsheetId          string `yaml:"spreadsheet_id"`
 	ScheduledPaymentsSheet string `yaml:"scheduled_payments_sheet"`
@@ -110,13 +113,9 @@ func main() {
 		log.Fatalf("[%s] failed to read sheet %s: %v", params.SpreadsheetId, params.RecurringPaymentsSheet, err)
 	}
 
-	payments, err := readRecurringPayments(sheet)
+	recurring, err := readRecurringPayments(sheet)
 	if err != nil {
 		log.Fatalf("[%s/%s] failed to process recurring payments: %v", params.SpreadsheetId, params.RecurringPaymentsSheet, err)
-	}
-	fmt.Println("Pending recurring payments; cough it up man 💸 💸 💸")
-	for _, p := range payments {
-		fmt.Printf("  - %s\n", p.description)
 	}
 
 	// scheduled payments
@@ -125,15 +124,113 @@ func main() {
 		log.Fatalf("[%s] failed to read sheet %s: %v", params.SpreadsheetId, params.ScheduledPaymentsSheet, err)
 	}
 
-	payments, err = readScheduledPayments(sheet)
+	scheduled, err := readScheduledPayments(sheet)
 	if err != nil {
 		log.Fatalf("[%s] failed to read sheet %s: %v", params.SpreadsheetId, params.ScheduledPaymentsSheet, err)
 	}
-	fmt.Println("Pending scheduled payments 💸 💸 💸")
-	for _, p := range payments {
-		fmt.Printf("  - %s\n", p.description)
+
+	// formulate payment report
+	sections := []string{}
+	if summary := SummarizeDelayedPayments(scheduled); summary != "" {
+		sections = append(sections, summary)
+	}
+	if summary := SummarizePaymentsForToday(scheduled); summary != "" {
+		sections = append(sections, summary)
+	}
+	if summary := SummarizePaymentsComingUp(scheduled); summary != "" {
+		sections = append(sections, summary)
+	}
+	if summary := SummarizeMonthlyPayments(recurring); summary != "" {
+		sections = append(sections, summary)
 	}
 
+	report := strings.Join(sections, "\n")
+
+	if len(sections) > 0 {
+		fmt.Println(report)
+		if err := SendNotification(params.NotificationTopic, "💸 💸 💸 Payment Report 💸 💸 💸", report, ""); err != nil {
+			log.Fatalf("notification error: %v", err)
+		}
+	} else {
+		fmt.Println("Nothing to report")
+	}
+}
+
+func SummarizeDelayedPayments(scheduled []*Payment) string {
+	delayed := FindPaymentsUntil(scheduled, -1, time.Now())
+
+	if len(delayed) > 0 {
+		message := fmt.Sprintf("⚠ Delayed: ")
+		descriptions := []string{}
+		for _, p := range delayed {
+			descriptions = append(descriptions, p.description)
+		}
+		return message + strings.Join(descriptions, ", ")
+	}
+	return ""
+}
+
+func SummarizePaymentsForToday(scheduled []*Payment) string {
+	payments := FindPaymentsAt(scheduled, 0, time.Now())
+
+	if len(payments) > 0 {
+		message := fmt.Sprintf("💸 Today: ")
+		descriptions := []string{}
+		for _, p := range payments {
+			descriptions = append(descriptions, p.description)
+		}
+		return message + strings.Join(descriptions, ", ")
+	}
+	return "😎 Nothing for today"
+}
+
+func SummarizePaymentsComingUp(scheduled []*Payment) string {
+	comingUp := []*Payment{}
+	for _, p := range scheduled {
+		d := p.DiffFromNowInDays(time.Now())
+		if d == 1 || d == 2 {
+			comingUp = append(comingUp, p)
+		}
+	}
+	if len(comingUp) > 0 {
+		message := fmt.Sprintf("⏳ Coming Up: ")
+		descriptions := []string{}
+		for _, p := range comingUp {
+			d := p.DiffFromNowInDays(time.Now())
+			if d == 1 || d == 2 {
+				descriptions = append(descriptions, p.description)
+			}
+		}
+		return message + strings.Join(descriptions, ", ")
+	}
+	return ""
+}
+
+func SummarizeMonthlyPayments(recurring []*Payment) string {
+	if len(recurring) > 0 {
+		return fmt.Sprintf("🗓  Monthly: %d pending", len(recurring))
+	}
+	return ""
+}
+
+func FindPaymentsAt(payments []*Payment, diff int, now time.Time) []*Payment {
+	found := []*Payment{}
+	for _, p := range payments {
+		if p.DiffFromNowInDays(now) == diff {
+			found = append(found, p)
+		}
+	}
+	return found
+}
+
+func FindPaymentsUntil(payments []*Payment, maxDiff int, now time.Time) []*Payment {
+	delayed := []*Payment{}
+	for _, p := range payments {
+		if p.DiffFromNowInDays(now) <= maxDiff {
+			delayed = append(delayed, p)
+		}
+	}
+	return delayed
 }
 
 func getSheet(svc *sheets.Service, spreadsheetId, sheetName string) ([][]interface{}, error) {
@@ -213,6 +310,7 @@ func readScheduledPayments(rows [][]interface{}) ([]*Payment, error) {
 	payments := []*Payment{}
 	var (
 		err error
+		due time.Time
 	)
 
 	for _, row := range rows[1:] {
@@ -225,10 +323,28 @@ func readScheduledPayments(rows [][]interface{}) ([]*Payment, error) {
 			payments = append(payments, NewPayment(row[descriptionIndex].(string)))
 			continue
 		}
-		if _, err = time.Parse(time.DateOnly, dueDate); err != nil {
+		if due, err = time.Parse(time.DateOnly, dueDate); err != nil {
 			return nil, fmt.Errorf("failed to parse due date value %s: %v", dueDate, err)
 		}
-		payments = append(payments, NewPayment(row[descriptionIndex].(string)))
+		payments = append(payments, NewPayment(row[descriptionIndex].(string)).WithDueDate(due))
 	}
 	return payments, nil
+}
+
+func SendNotification(topic, title, message, tag string) error {
+	host := fmt.Sprintf("https://ntfy.sh/%s", topic)
+	req, err := http.NewRequest(http.MethodPost, host, strings.NewReader(message))
+	if err != nil {
+		return fmt.Errorf("failed to create http request: %v", err)
+	}
+	req.Header.Set("Title", title)
+	req.Header.Set("Tags", tag)
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("error sending http request: %v", err)
+	}
+	if res.StatusCode != http.StatusOK {
+		return fmt.Errorf("server responded with status=%d", res.StatusCode)
+	}
+	return nil
 }
