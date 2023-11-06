@@ -12,5 +12,5 @@ TODO:
 - [ ] error notifications
 - [ ] cron string in config.yml
 - [ ] deploy cron
-- [ ] API (for running ad-hoc)
+- [ ] API (for health check, reporting, running ad-hoc)
 - [ ] extract google sheets as a service
