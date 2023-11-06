@@ -2,10 +2,10 @@ package main
 
 import (
 	"context"
+	_ "embed"
 	"errors"
 	"flag"
 	"fmt"
-	"io/ioutil"
 	"log"
 	"net/http"
 	"strings"
@@ -20,6 +20,9 @@ import (
 	"google.golang.org/api/sheets/v4"
 	"gopkg.in/yaml.v3"
 )
+
+//go:embed config.yml
+var configFileContents string
 
 var _GR *time.Location
 
@@ -44,14 +47,6 @@ type Params struct {
 	SpreadsheetId          string `yaml:"spreadsheet_id"`
 	ScheduledPaymentsSheet string `yaml:"scheduled_payments_sheet"`
 	RecurringPaymentsSheet string `yaml:"recurring_payments_sheet"`
-}
-
-func ReadParamsFile(path string) (contents []byte, err error) {
-	contents, err = ioutil.ReadFile(path)
-	if err != nil {
-		return
-	}
-	return
 }
 
 // parse the orkfile and populate the task inventory
@@ -146,27 +141,16 @@ func notify(topic, report string) error {
 
 func main() {
 	var (
-		print      bool
-		cronMode   bool
-		configFile string
+		print    bool
+		cronMode bool
 	)
 	flag.BoolVar(&print, "print", false, "Print the report on screen as well")
 	flag.BoolVar(&cronMode, "cron", false, "Activate cron mode")
-	flag.StringVar(&configFile, "file", "", "Path to config file")
 	flag.Parse()
-
-	if configFile == "" {
-		log.Fatal("Please supply the -file argument with the path to the yaml config file")
-	}
 
 	log.Printf("cron_mode=%v", cronMode)
 
-	paramsContent, err := ReadParamsFile(configFile)
-	if err != nil {
-		log.Fatalf("Unable to read params file: %v", err)
-	}
-
-	params, err := ParseParams(paramsContent)
+	params, err := ParseParams([]byte(configFileContents))
 	if err != nil {
 		log.Fatalf("Unable to parse params file: %v", err)
 	}
