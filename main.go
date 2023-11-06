@@ -11,8 +11,11 @@ import (
 	"strings"
 	"time"
 
+	"github.com/robfig/cron/v3"
+
 	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/google"
+	"golang.org/x/oauth2/jwt"
 	"google.golang.org/api/option"
 	"google.golang.org/api/sheets/v4"
 	"gopkg.in/yaml.v3"
@@ -83,6 +86,64 @@ func (p *Payment) DiffFromNowInDays(now time.Time) int {
 	return int(d)
 }
 
+func run(params *Params, config *jwt.Config) (string, error) {
+	client := config.Client(oauth2.NoContext)
+	svc, err := sheets.NewService(context.Background(), option.WithHTTPClient(client))
+	if err != nil {
+		return "", fmt.Errorf("Unable to retrieve Sheets Client: %v", err)
+	}
+
+	// recurring payments
+	sheet, err := getSheet(svc, params.SpreadsheetId, params.RecurringPaymentsSheet)
+	if err != nil {
+		return "", fmt.Errorf("[%s] failed to read sheet %s: %v", params.SpreadsheetId, params.RecurringPaymentsSheet, err)
+	}
+
+	recurring, err := readRecurringPayments(sheet)
+	if err != nil {
+		return "", fmt.Errorf("[%s/%s] failed to process recurring payments: %v", params.SpreadsheetId, params.RecurringPaymentsSheet, err)
+	}
+
+	// scheduled payments
+	sheet, err = getSheet(svc, params.SpreadsheetId, params.ScheduledPaymentsSheet)
+	if err != nil {
+		return "", fmt.Errorf("[%s] failed to read sheet %s: %v", params.SpreadsheetId, params.ScheduledPaymentsSheet, err)
+	}
+
+	scheduled, err := readScheduledPayments(sheet)
+	if err != nil {
+		return "", fmt.Errorf("[%s] failed to read sheet %s: %v", params.SpreadsheetId, params.ScheduledPaymentsSheet, err)
+	}
+
+	// formulate payment report
+	sections := []string{}
+	if summary := SummarizeDelayedPayments(scheduled); summary != "" {
+		sections = append(sections, summary)
+	}
+	if summary := SummarizePaymentsForToday(scheduled); summary != "" {
+		sections = append(sections, summary)
+	}
+	if summary := SummarizePaymentsComingUp(scheduled); summary != "" {
+		sections = append(sections, summary)
+	}
+	if summary := SummarizeMonthlyPayments(recurring); summary != "" {
+		sections = append(sections, summary)
+	}
+
+	if len(sections) > 0 {
+		return strings.Join(sections, "\n"), nil
+	} else {
+		return "🕶  Nothing to report", nil
+	}
+}
+
+func notify(topic, report string) error {
+	if err := SendNotification(topic, "💸 💸 💸 Payment Report 💸 💸 💸", report, ""); err != nil {
+		return fmt.Errorf("notification error: %v", err)
+	}
+	return nil
+}
+
 func main() {
 	if len(os.Args[1:]) != 1 {
 		log.Fatal("Please supply a single argument with the path to the config file")
@@ -103,59 +164,18 @@ func main() {
 		log.Fatalf("Unable to parse client secret file to config: %v", err)
 	}
 
-	client := config.Client(oauth2.NoContext)
-	svc, err := sheets.NewService(context.Background(), option.WithHTTPClient(client))
-	if err != nil {
-		log.Fatalf("Unable to retrieve Sheets Client: %v", err)
-	}
-
-	// recurring payments
-	sheet, err := getSheet(svc, params.SpreadsheetId, params.RecurringPaymentsSheet)
-	if err != nil {
-		log.Fatalf("[%s] failed to read sheet %s: %v", params.SpreadsheetId, params.RecurringPaymentsSheet, err)
-	}
-
-	recurring, err := readRecurringPayments(sheet)
-	if err != nil {
-		log.Fatalf("[%s/%s] failed to process recurring payments: %v", params.SpreadsheetId, params.RecurringPaymentsSheet, err)
-	}
-
-	// scheduled payments
-	sheet, err = getSheet(svc, params.SpreadsheetId, params.ScheduledPaymentsSheet)
-	if err != nil {
-		log.Fatalf("[%s] failed to read sheet %s: %v", params.SpreadsheetId, params.ScheduledPaymentsSheet, err)
-	}
-
-	scheduled, err := readScheduledPayments(sheet)
-	if err != nil {
-		log.Fatalf("[%s] failed to read sheet %s: %v", params.SpreadsheetId, params.ScheduledPaymentsSheet, err)
-	}
-
-	// formulate payment report
-	sections := []string{}
-	if summary := SummarizeDelayedPayments(scheduled); summary != "" {
-		sections = append(sections, summary)
-	}
-	if summary := SummarizePaymentsForToday(scheduled); summary != "" {
-		sections = append(sections, summary)
-	}
-	if summary := SummarizePaymentsComingUp(scheduled); summary != "" {
-		sections = append(sections, summary)
-	}
-	if summary := SummarizeMonthlyPayments(recurring); summary != "" {
-		sections = append(sections, summary)
-	}
-
-	report := strings.Join(sections, "\n")
-
-	if len(sections) > 0 {
-		fmt.Println(report)
-		if err := SendNotification(params.NotificationTopic, "💸 💸 💸 Payment Report 💸 💸 💸", report, ""); err != nil {
-			log.Fatalf("notification error: %v", err)
+	c := cron.New(cron.WithLocation(GreekTimeZone()))
+	c.AddFunc("0 0 10 * * *", func() {
+		report, err := run(params, config)
+		if err != nil {
+			log.Printf("Failed to send payment report: %v", err)
 		}
-	} else {
-		fmt.Println("Nothing to report")
-	}
+		if err := notify(params.NotificationTopic, report); err != nil {
+			log.Printf("Failed to send error notification: %v", err)
+		}
+	})
+
+	select {}
 }
 
 func SummarizeDelayedPayments(scheduled []*Payment) string {

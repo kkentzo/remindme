@@ -3,6 +3,7 @@ module github.com/kkentzo/remindme
 go 1.20
 
 require (
+	github.com/robfig/cron/v3 v3.0.0
 	github.com/stretchr/testify v1.8.4
 	golang.org/x/oauth2 v0.13.0
 	google.golang.org/api v0.149.0
