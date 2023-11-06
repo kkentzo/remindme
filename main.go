@@ -3,11 +3,11 @@ package main
 import (
 	"context"
 	"errors"
+	"flag"
 	"fmt"
 	"io/ioutil"
 	"log"
 	"net/http"
-	"os"
 	"strings"
 	"time"
 
@@ -145,11 +145,23 @@ func notify(topic, report string) error {
 }
 
 func main() {
-	if len(os.Args[1:]) != 1 {
-		log.Fatal("Please supply a single argument with the path to the config file")
+	var (
+		print      bool
+		cronMode   bool
+		configFile string
+	)
+	flag.BoolVar(&print, "print", false, "Print the report on screen as well")
+	flag.BoolVar(&cronMode, "cron", false, "Activate cron mode")
+	flag.StringVar(&configFile, "file", "", "Path to config file")
+	flag.Parse()
+
+	if configFile == "" {
+		log.Fatal("Please supply the -file argument with the path to the yaml config file")
 	}
 
-	paramsContent, err := ReadParamsFile(os.Args[1])
+	log.Printf("cron_mode=%v", cronMode)
+
+	paramsContent, err := ReadParamsFile(configFile)
 	if err != nil {
 		log.Fatalf("Unable to read params file: %v", err)
 	}
@@ -164,18 +176,31 @@ func main() {
 		log.Fatalf("Unable to parse client secret file to config: %v", err)
 	}
 
-	c := cron.New(cron.WithLocation(GreekTimeZone()))
-	c.AddFunc("0 0 10 * * *", func() {
+	if cronMode {
+		c := cron.New(cron.WithLocation(GreekTimeZone()))
+		c.AddFunc("0 0 10 * * *", func() {
+			report, err := run(params, config)
+			if err != nil {
+				log.Printf("Failed to send payment report: %v", err)
+			}
+			if err := notify(params.NotificationTopic, report); err != nil {
+				log.Printf("Failed to send error notification: %v", err)
+			}
+		})
+
+		select {}
+	} else {
 		report, err := run(params, config)
 		if err != nil {
 			log.Printf("Failed to send payment report: %v", err)
 		}
+		if print {
+			fmt.Print(report)
+		}
 		if err := notify(params.NotificationTopic, report); err != nil {
 			log.Printf("Failed to send error notification: %v", err)
 		}
-	})
-
-	select {}
+	}
 }
 
 func SummarizeDelayedPayments(scheduled []*Payment) string {
@@ -230,7 +255,7 @@ func SummarizePaymentsComingUp(scheduled []*Payment) string {
 
 func SummarizeMonthlyPayments(recurring []*Payment) string {
 	if len(recurring) > 0 {
-		return fmt.Sprintf("🗓  Monthly: %d pending", len(recurring))
+		return fmt.Sprintf("🗓 Monthly: %d pending", len(recurring))
 	}
 	return ""
 }
