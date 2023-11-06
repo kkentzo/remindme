@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io/ioutil"
@@ -12,6 +13,7 @@ import (
 
 	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/google"
+	"google.golang.org/api/option"
 	"google.golang.org/api/sheets/v4"
 	"gopkg.in/yaml.v3"
 )
@@ -102,7 +104,7 @@ func main() {
 	}
 
 	client := config.Client(oauth2.NoContext)
-	svc, err := sheets.New(client)
+	svc, err := sheets.NewService(context.Background(), option.WithHTTPClient(client))
 	if err != nil {
 		log.Fatalf("Unable to retrieve Sheets Client: %v", err)
 	}
