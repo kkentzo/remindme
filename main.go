@@ -145,7 +145,7 @@ func main() {
 		cronMode bool
 	)
 	flag.BoolVar(&print, "print", false, "Print the report on screen as well")
-	flag.BoolVar(&cronMode, "cron", false, "Activate cron mode")
+	flag.BoolVar(&cronMode, "cron", true, "Enable/disable cron mode")
 	flag.Parse()
 
 	log.Printf("cron_mode=%v", cronMode)
