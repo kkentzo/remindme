@@ -198,7 +198,7 @@ func SummarizePaymentsComingUp(scheduled []*Payment) string {
 		for _, p := range comingUp {
 			d := p.DiffFromNowInDays(time.Now())
 			if d == 1 || d == 2 {
-				descriptions = append(descriptions, p.description)
+				descriptions = append(descriptions, fmt.Sprintf("%s (%dd)", p.description, d))
 			}
 		}
 		return message + strings.Join(descriptions, ", ")
@@ -247,9 +247,9 @@ func getSheet(svc *sheets.Service, spreadsheetId, sheetName string) ([][]interfa
 }
 
 func readRecurringPayments(rows [][]interface{}) ([]*Payment, error) {
-	// what's the current month?
-	month := fmt.Sprintf("%d", time.Now().Month())
-	// find index of current month
+	// what's the previous month?
+	month := fmt.Sprintf("%d", time.Now().AddDate(0, -1, 0).Month())
+	// find index of previous month
 	descriptionIndex := -1
 	columnIndex := -1
 	for idx, v := range rows[0] {
@@ -262,7 +262,7 @@ func readRecurringPayments(rows [][]interface{}) ([]*Payment, error) {
 		}
 	}
 	if columnIndex == -1 {
-		return nil, errors.New("current month was not found in sheet header")
+		return nil, errors.New("previous month was not found in sheet header")
 	}
 	if descriptionIndex == -1 {
 		return nil, errors.New("description label was not found in sheet header")
