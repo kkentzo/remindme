@@ -8,9 +8,9 @@ Process:
 
 TODO:
 
-- [ ] run as cron or on-demand (cmd-line switch)
+- [x] run as cron or on-demand (cmd-line switch)
+- [x] deploy cron
+- [x] cron string in config.yml
 - [ ] error notifications
-- [ ] cron string in config.yml
-- [ ] deploy cron
 - [ ] API (for health check, reporting, running ad-hoc)
 - [ ] extract google sheets as a service
