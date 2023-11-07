@@ -43,6 +43,7 @@ func ToDate(t time.Time) time.Time {
 
 type Params struct {
 	NotificationTopic      string `yaml:"ntfy_topic"`
+	CronSchedule           string `yaml:"cron_schedule"`
 	Credentials            string `yaml:"credentials"`
 	SpreadsheetId          string `yaml:"spreadsheet_id"`
 	ScheduledPaymentsSheet string `yaml:"scheduled_payments_sheet"`
@@ -162,7 +163,7 @@ func main() {
 
 	if cronMode {
 		c := cron.New(cron.WithLocation(GreekTimeZone()))
-		c.AddFunc("0 0 9 * * *", func() {
+		c.AddFunc(params.CronSchedule, func() {
 			report, err := run(params, config)
 			if err != nil {
 				log.Printf("Failed to send payment report: %v", err)
@@ -175,7 +176,7 @@ func main() {
 
 		c.Start()
 
-		log.Print("started cron")
+		log.Printf("started cron with schedule='%s'", params.CronSchedule)
 
 		select {}
 	} else {
