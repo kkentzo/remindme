@@ -163,16 +163,20 @@ func main() {
 
 	if cronMode {
 		c := cron.New(cron.WithLocation(GreekTimeZone()))
-		c.AddFunc(params.CronSchedule, func() {
+		_, err := c.AddFunc(params.CronSchedule, func() {
 			report, err := run(params, config)
 			if err != nil {
 				log.Printf("Failed to send payment report: %v", err)
 			}
 			if err := notify(params.NotificationTopic, report); err != nil {
 				log.Printf("Failed to send error notification: %v", err)
+			} else {
+				log.Print("Report was sent")
 			}
-			log.Print("Notification Sent")
 		})
+		if err != nil {
+			log.Fatalf("failed to setup cron: %v", err)
+		}
 
 		c.Start()
 
