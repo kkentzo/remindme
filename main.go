@@ -41,18 +41,22 @@ func ToDate(t time.Time) time.Time {
 	return time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, GreekTimeZone())
 }
 
-type Params struct {
-	NotificationTopic      string `yaml:"ntfy_topic"`
-	CronSchedule           string `yaml:"cron_schedule"`
-	Credentials            string `yaml:"credentials"`
-	SpreadsheetId          string `yaml:"spreadsheet_id"`
-	ScheduledPaymentsSheet string `yaml:"scheduled_payments_sheet"`
-	RecurringPaymentsSheet string `yaml:"recurring_payments_sheet"`
+type Sheet struct {
+	SpreadsheetId string `yaml:"spreadsheet_id"`
+	Name          string `yaml:"name"`
+	Type          string `yaml:"type"`
+}
+
+type Config struct {
+	NotificationTopic      string   `yaml:"ntfy_topic"`
+	CronSchedule           string   `yaml:"cron_schedule"`
+	Credentials            string   `yaml:"credentials"`
+	Sheets                 []*Sheet `yaml:"sheets"`
 }
 
 // parse the orkfile and populate the task inventory
-func ParseParams(contents []byte) (*Params, error) {
-	p := &Params{}
+func ParseConfig(contents []byte) (*Config, error) {
+	p := &Config{}
 	if err := yaml.Unmarshal(contents, p); err != nil {
 		return nil, err
 	}
@@ -65,15 +69,16 @@ type Payment struct {
 }
 
 func NewPayment(description string) *Payment {
-	return &Payment{
-		description: description,
-		due:         ToDate(time.Now().In(GreekTimeZone())),
-	}
+	return &Payment{description: description}
 }
 
 func (p *Payment) WithDueDate(due time.Time) *Payment {
 	p.due = ToDate(due.In(GreekTimeZone()))
 	return p
+}
+
+func (p *Payment) IsDue() bool {
+	return p.due != time.Time{}
 }
 
 func (p *Payment) DiffFromNowInDays(now time.Time) int {
@@ -82,60 +87,52 @@ func (p *Payment) DiffFromNowInDays(now time.Time) int {
 	return int(d)
 }
 
-func run(params *Params, config *jwt.Config) (string, error) {
-	client := config.Client(oauth2.NoContext)
+func run(config *Config, jwtcfg *jwt.Config, print bool) error {
+	client := jwtcfg.Client(oauth2.NoContext)
 	svc, err := sheets.NewService(context.Background(), option.WithHTTPClient(client))
 	if err != nil {
-		return "", fmt.Errorf("Unable to retrieve Sheets Client: %v", err)
+		return fmt.Errorf("Unable to retrieve Sheets Client: %v", err)
 	}
 
-	// recurring payments
-	sheet, err := getSheet(svc, params.SpreadsheetId, params.RecurringPaymentsSheet)
-	if err != nil {
-		return "", fmt.Errorf("[%s] failed to read sheet %s: %v", params.SpreadsheetId, params.RecurringPaymentsSheet, err)
-	}
+	payments := []*Payment{}
 
-	recurring, err := readRecurringPayments(sheet)
-	if err != nil {
-		return "", fmt.Errorf("[%s/%s] failed to process recurring payments: %v", params.SpreadsheetId, params.RecurringPaymentsSheet, err)
-	}
-
-	// scheduled payments
-	sheet, err = getSheet(svc, params.SpreadsheetId, params.ScheduledPaymentsSheet)
-	if err != nil {
-		return "", fmt.Errorf("[%s] failed to read sheet %s: %v", params.SpreadsheetId, params.ScheduledPaymentsSheet, err)
-	}
-
-	scheduled, err := readScheduledPayments(sheet)
-	if err != nil {
-		return "", fmt.Errorf("[%s] failed to read sheet %s: %v", params.SpreadsheetId, params.ScheduledPaymentsSheet, err)
+	for _, sheet := range config.Sheets {
+		rows, err := getSheet(svc, sheet.SpreadsheetId, sheet.Name)
+		if err != nil {
+			return fmt.Errorf("failed to read sheet %s: %v", sheet.Name, err)
+		}
+		p, err := readPayments(rows)
+		if err != nil {
+			return fmt.Errorf("failed to read payments from sheet '%s': %v", sheet.Name, err)
+		}
+		payments = append(payments, p...)
 	}
 
 	// formulate payment report
 	sections := []string{}
-	if summary := SummarizeDelayedPayments(scheduled); summary != "" {
+	if summary := SummarizeDelayedPayments(payments); summary != "" {
 		sections = append(sections, summary)
 	}
-	if summary := SummarizePaymentsForToday(scheduled); summary != "" {
+	if summary := SummarizePaymentsForToday(payments); summary != "" {
 		sections = append(sections, summary)
 	}
-	if summary := SummarizePaymentsComingUp(scheduled); summary != "" {
+	if summary := SummarizePaymentsComingUp(payments, 3); summary != "" {
 		sections = append(sections, summary)
 	}
-	if summary := SummarizeMonthlyPayments(recurring); summary != "" {
+	if summary := SummarizeTotalPayments(payments, 30); summary != "" {
 		sections = append(sections, summary)
+	}
+	if len(sections) == 0 {
+		sections = append(sections, "🕶  Nothing to report")
 	}
 
-	if len(sections) > 0 {
-		return strings.Join(sections, "\n"), nil
-	} else {
-		return "🕶  Nothing to report", nil
-	}
-}
+	// format and send report
+	report := strings.Join(sections, "\n")
 
-func notify(topic, report string) error {
-	if err := SendNotification(topic, "💸 Payment Report", report, ""); err != nil {
-		return fmt.Errorf("notification error: %v", err)
+	if print { fmt.Print(report) }
+
+	if err := SendNotification(config.NotificationTopic, "=== Payment Report ===", report, ""); err != nil {
+		return fmt.Errorf("failed to send notification: %v", err)
 	}
 	return nil
 }
@@ -151,54 +148,44 @@ func main() {
 
 	log.Printf("cron_mode=%v", cronMode)
 
-	params, err := ParseParams([]byte(configFileContents))
+	config, err := ParseConfig([]byte(configFileContents))
 	if err != nil {
-		log.Fatalf("Unable to parse params file: %v", err)
+		log.Fatalf("Unable to parse config file: %v", err)
 	}
 
-	config, err := google.JWTConfigFromJSON([]byte(params.Credentials), sheets.SpreadsheetsScope)
+	log.Printf("Found %d sheets", len(config.Sheets))
+
+	jwtcfg, err := google.JWTConfigFromJSON([]byte(config.Credentials), sheets.SpreadsheetsScope)
 	if err != nil {
 		log.Fatalf("Unable to parse client secret file to config: %v", err)
 	}
 
 	if cronMode {
 		c := cron.New(cron.WithLocation(GreekTimeZone()))
-		_, err := c.AddFunc(params.CronSchedule, func() {
-			report, err := run(params, config)
-			if err != nil {
-				log.Printf("Failed to send payment report: %v", err)
-			}
-			if err := notify(params.NotificationTopic, report); err != nil {
-				log.Printf("Failed to send error notification: %v", err)
-			} else {
-				log.Print("Report was sent")
+		_, err := c.AddFunc(config.CronSchedule, func() {
+			if err := run(config, jwtcfg, print); err != nil {
+				log.Printf(err.Error())
 			}
 		})
+
 		if err != nil {
 			log.Fatalf("failed to setup cron: %v", err)
 		}
 
 		c.Start()
 
-		log.Printf("started cron with schedule='%s'", params.CronSchedule)
+		log.Printf("started cron with schedule='%s'", config.CronSchedule)
 
 		select {}
 	} else {
-		report, err := run(params, config)
-		if err != nil {
-			log.Printf("Failed to send payment report: %v", err)
-		}
-		if print {
-			fmt.Print(report)
-		}
-		if err := notify(params.NotificationTopic, report); err != nil {
-			log.Printf("Failed to send error notification: %v", err)
+		if err := run(config, jwtcfg, print); err != nil {
+			log.Printf(err.Error())
 		}
 	}
 }
 
-func SummarizeDelayedPayments(scheduled []*Payment) string {
-	delayed := FindPaymentsUntil(scheduled, -1, time.Now())
+func SummarizeDelayedPayments(payments []*Payment) string {
+	delayed := FindPaymentsUntil(payments, -1, time.Now())
 
 	if len(delayed) > 0 {
 		message := fmt.Sprintf("⚠ Delayed: ")
@@ -211,13 +198,13 @@ func SummarizeDelayedPayments(scheduled []*Payment) string {
 	return ""
 }
 
-func SummarizePaymentsForToday(scheduled []*Payment) string {
-	payments := FindPaymentsAt(scheduled, 0, time.Now())
+func SummarizePaymentsForToday(payments []*Payment) string {
+	scheduled := FindPaymentsAt(payments, 0, time.Now())
 
-	if len(payments) > 0 {
+	if len(scheduled) > 0 {
 		message := fmt.Sprintf("💸 Today: ")
 		descriptions := []string{}
-		for _, p := range payments {
+		for _, p := range scheduled {
 			descriptions = append(descriptions, p.description)
 		}
 		return message + strings.Join(descriptions, ", ")
@@ -225,38 +212,46 @@ func SummarizePaymentsForToday(scheduled []*Payment) string {
 	return "😎 Nothing for today"
 }
 
-func SummarizePaymentsComingUp(scheduled []*Payment) string {
+func SummarizePaymentsComingUp(payments []*Payment, timeWindowInDays int) string {
 	comingUp := []*Payment{}
-	for _, p := range scheduled {
+	for _, p := range payments {
+		// skip non-due payments
+		if !p.IsDue() {
+			continue
+		}
 		d := p.DiffFromNowInDays(time.Now())
-		if d == 1 || d == 2 {
+		if d >= 1 && d <= timeWindowInDays {
 			comingUp = append(comingUp, p)
 		}
 	}
 	if len(comingUp) > 0 {
-		message := fmt.Sprintf("⏳ Coming Up: ")
+		message := fmt.Sprintf("⏳ Coming Up (next %d days): ", timeWindowInDays)
 		descriptions := []string{}
 		for _, p := range comingUp {
-			d := p.DiffFromNowInDays(time.Now())
-			if d == 1 || d == 2 {
-				descriptions = append(descriptions, fmt.Sprintf("%s (%dd)", p.description, d))
-			}
+			descriptions = append(descriptions, fmt.Sprintf("%s", p.description))
 		}
 		return message + strings.Join(descriptions, ", ")
 	}
-	return ""
+	return fmt.Sprintf("😎 Nothing coming up (next %d days)", timeWindowInDays)
 }
 
-func SummarizeMonthlyPayments(recurring []*Payment) string {
-	if len(recurring) > 0 {
-		return fmt.Sprintf("🗓 Monthly: %d pending", len(recurring))
+func SummarizeTotalPayments(payments []*Payment, timeWindowInDays int) string {
+	n := 0
+	for _, p := range payments {
+		if p.DiffFromNowInDays(time.Now()) <= timeWindowInDays {
+			n += 1
+		}
 	}
-	return ""
+	return fmt.Sprintf("💰 Total %d payments pending during the next %d days", n, timeWindowInDays)
 }
 
 func FindPaymentsAt(payments []*Payment, diff int, now time.Time) []*Payment {
 	found := []*Payment{}
 	for _, p := range payments {
+		// skip non-due payments
+		if !p.IsDue() {
+			continue
+		}
 		if p.DiffFromNowInDays(now) == diff {
 			found = append(found, p)
 		}
@@ -267,6 +262,10 @@ func FindPaymentsAt(payments []*Payment, diff int, now time.Time) []*Payment {
 func FindPaymentsUntil(payments []*Payment, maxDiff int, now time.Time) []*Payment {
 	delayed := []*Payment{}
 	for _, p := range payments {
+		// skip non-due payments
+		if !p.IsDue() {
+			continue
+		}
 		if p.DiffFromNowInDays(now) <= maxDiff {
 			delayed = append(delayed, p)
 		}
@@ -287,42 +286,7 @@ func getSheet(svc *sheets.Service, spreadsheetId, sheetName string) ([][]interfa
 
 }
 
-func readRecurringPayments(rows [][]interface{}) ([]*Payment, error) {
-	// what's the previous month?
-	month := fmt.Sprintf("%d", time.Now().AddDate(0, -1, 0).Month())
-	// find index of previous month
-	descriptionIndex := -1
-	columnIndex := -1
-	for idx, v := range rows[0] {
-		val := v.(string)
-		if val == "Description" {
-			descriptionIndex = idx
-		}
-		if val == string(month) {
-			columnIndex = idx
-		}
-	}
-	if columnIndex == -1 {
-		return nil, errors.New("previous month was not found in sheet header")
-	}
-	if descriptionIndex == -1 {
-		return nil, errors.New("description label was not found in sheet header")
-	}
-
-	payments := []*Payment{}
-
-	for _, row := range rows[1:] {
-		// `len(row) <= columnIndex` means that there are values in the row before the
-		// value column of interest -- so for sure, this month is pending
-		if len(row) <= columnIndex || row[columnIndex].(string) == "" {
-			payments = append(payments, NewPayment(row[descriptionIndex].(string)))
-		}
-	}
-	return payments, nil
-}
-
-func readScheduledPayments(rows [][]interface{}) ([]*Payment, error) {
-	// find index of current month
+func readPayments(rows [][]interface{}) ([]*Payment, error) {
 	descriptionIndex := -1
 	dueDateIndex := -1
 	paymentDateIndex := -1
@@ -338,9 +302,6 @@ func readScheduledPayments(rows [][]interface{}) ([]*Payment, error) {
 			paymentDateIndex = idx
 		}
 	}
-	if dueDateIndex == -1 {
-		return nil, errors.New("due date was not found in sheet header")
-	}
 	if descriptionIndex == -1 {
 		return nil, errors.New("description label was not found in sheet header")
 	}
@@ -350,24 +311,42 @@ func readScheduledPayments(rows [][]interface{}) ([]*Payment, error) {
 
 	payments := []*Payment{}
 	var (
-		err error
-		due time.Time
+		err     error
+		due     time.Time
+		dueDate string
 	)
 
-	for _, row := range rows[1:] {
-		dueDate := row[dueDateIndex].(string)
+	for idx, row := range rows[1:] {
+		if descriptionIndex > len(row) - 1 {
+			return nil, fmt.Errorf("can not read description (column=%d) in row %d", descriptionIndex, idx)
+		}
+		if dueDateIndex > len(row) - 1 {
+			return nil, fmt.Errorf("can not read due date (column=%d) in row %d", dueDateIndex, idx)
+		}
+		if paymentDateIndex > len(row) - 1 {
+			return nil, fmt.Errorf("can not read payment date (column=%d) in row %d", paymentDateIndex, idx)
+		}
+
+		description := row[descriptionIndex].(string)
+
+		if dueDateIndex >= 0 {
+			dueDate = row[dueDateIndex].(string)
+		}
 		paymentDate := row[paymentDateIndex].(string)
 		if paymentDate != "" {
+			// already paid -- skip
 			continue
 		}
-		if dueDate == "" {
-			payments = append(payments, NewPayment(row[descriptionIndex].(string)))
+		if dueDateIndex == -1 {
+			// not a scheduled payment -- add to payments and continue
+			payments = append(payments, NewPayment(description))
 			continue
 		}
+		// scheduled payment -- parse due date
 		if due, err = time.Parse(time.DateOnly, dueDate); err != nil {
 			return nil, fmt.Errorf("failed to parse due date value %s: %v", dueDate, err)
 		}
-		payments = append(payments, NewPayment(row[descriptionIndex].(string)).WithDueDate(due))
+		payments = append(payments, NewPayment(description).WithDueDate(due))
 	}
 	return payments, nil
 }
