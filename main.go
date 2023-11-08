@@ -134,7 +134,7 @@ func run(params *Params, config *jwt.Config) (string, error) {
 }
 
 func notify(topic, report string) error {
-	if err := SendNotification(topic, "💸 💸 💸 Payment Report 💸 💸 💸", report, ""); err != nil {
+	if err := SendNotification(topic, "💸 Payment Report", report, ""); err != nil {
 		return fmt.Errorf("notification error: %v", err)
 	}
 	return nil
