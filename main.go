@@ -48,10 +48,10 @@ type Sheet struct {
 }
 
 type Config struct {
-	NotificationTopic      string   `yaml:"ntfy_topic"`
-	CronSchedule           string   `yaml:"cron_schedule"`
-	Credentials            string   `yaml:"credentials"`
-	Sheets                 []*Sheet `yaml:"sheets"`
+	NotificationTopic string   `yaml:"ntfy_topic"`
+	CronSchedule      string   `yaml:"cron_schedule"`
+	Credentials       string   `yaml:"credentials"`
+	Sheets            []*Sheet `yaml:"sheets"`
 }
 
 // parse the orkfile and populate the task inventory
@@ -116,7 +116,7 @@ func run(config *Config, jwtcfg *jwt.Config, print bool) error {
 	if summary := SummarizePaymentsForToday(payments); summary != "" {
 		sections = append(sections, summary)
 	}
-	if summary := SummarizePaymentsComingUp(payments, 3); summary != "" {
+	if summary := SummarizePaymentsComingUp(payments, 2); summary != "" {
 		sections = append(sections, summary)
 	}
 	if summary := SummarizeTotalPayments(payments, 30); summary != "" {
@@ -129,9 +129,11 @@ func run(config *Config, jwtcfg *jwt.Config, print bool) error {
 	// format and send report
 	report := strings.Join(sections, "\n")
 
-	if print { fmt.Print(report) }
+	if print {
+		fmt.Print(report)
+	}
 
-	if err := SendNotification(config.NotificationTopic, "=== Payment Report ===", report, ""); err != nil {
+	if err := SendNotification(config.NotificationTopic, "Payment Report", report, ""); err != nil {
 		return fmt.Errorf("failed to send notification: %v", err)
 	}
 	return nil
@@ -317,13 +319,13 @@ func readPayments(rows [][]interface{}) ([]*Payment, error) {
 	)
 
 	for idx, row := range rows[1:] {
-		if descriptionIndex > len(row) - 1 {
+		if descriptionIndex > len(row)-1 {
 			return nil, fmt.Errorf("can not read description (column=%d) in row %d", descriptionIndex, idx)
 		}
-		if dueDateIndex > len(row) - 1 {
+		if dueDateIndex > len(row)-1 {
 			return nil, fmt.Errorf("can not read due date (column=%d) in row %d", dueDateIndex, idx)
 		}
-		if paymentDateIndex > len(row) - 1 {
+		if paymentDateIndex > len(row)-1 {
 			return nil, fmt.Errorf("can not read payment date (column=%d) in row %d", paymentDateIndex, idx)
 		}
 
