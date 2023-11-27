@@ -24,21 +24,19 @@ into the application (see `config.sample.yml` as an example).
 
 ## Run Locally
 
-The application can be built locally by running;
-
-```bash
-$ ork build
-```
-
-Grab `ork` from [here](https://github.com/kkentzo/ork/releases/latest).
+The application can be built locally by running `ork build`. The `ork`
+executable can be found
+[here](https://github.com/kkentzo/ork/releases/latest).
 
 The above action will produce the executable `bin/remindme`. Run
 `./bin/remindme -h` for options.
 
 ## Deployment
 
-The program can be deployed to `fly.io` by running `flyctl deploy`
-(having set up the fly.io credentials beforehand).
+The program can be deployed to `fly.io` by running `ork
+deploy`. Follow [this
+guide](https://fly.io/docs/languages-and-frameworks/golang/) to set up
+the necessary resources (e.g. `flyctl launch`).
 
 ## TODO
 

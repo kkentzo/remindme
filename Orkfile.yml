@@ -1,5 +1,26 @@
+global:
+  default: build
+  env:
+    - CONFIG_FNAME: "config.yml"
+
 tasks:
+  - name: config.exists
+    description: check if the config file exists locally
+    actions:
+      - bash -c "if [ -f ${CONFIG_FNAME} ]; then exit 0; else exit 1; fi"
+    on_failure:
+      - echo "The file ${CONFIG_FNAME} needs to exist"
+
   - name: build
     description: build the application
+    depends_on:
+      - config.exists
     actions:
       - go build -o bin/remindme main.go
+
+  - name: deploy
+    description: deploy the application to fly.io
+    depends_on:
+      - config.exists
+    actions:
+      - flyctl deploy
