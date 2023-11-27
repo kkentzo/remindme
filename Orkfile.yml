@@ -1,0 +1,5 @@
+tasks:
+  - name: build
+    description: build the application
+    actions:
+      - go build -o bin/remindme main.go
