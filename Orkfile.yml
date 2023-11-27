@@ -11,10 +11,16 @@ tasks:
     on_failure:
       - echo "The file ${CONFIG_FNAME} needs to exist"
 
+  - name: test
+    description: run test suite
+    actions:
+    - go test ./...
+
   - name: build
     description: build the application
     depends_on:
       - config.exists
+      - test
     actions:
       - go build -o bin/remindme main.go
 
@@ -22,5 +28,6 @@ tasks:
     description: deploy the application to fly.io
     depends_on:
       - config.exists
+      - test
     actions:
       - flyctl deploy
