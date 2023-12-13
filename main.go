@@ -320,7 +320,9 @@ func readPayments(rows [][]interface{}) ([]*Payment, error) {
 
 	for idx, row := range rows[1:] {
 		if descriptionIndex > len(row)-1 {
-			return nil, fmt.Errorf("can not read description (column=%d) in row %d", descriptionIndex, idx)
+			// this means that there is no description
+			// we will consider the row as being empty and skip it
+			continue
 		}
 		if dueDateIndex > len(row)-1 {
 			return nil, fmt.Errorf("can not read due date (column=%d) in row %d", dueDateIndex, idx)
