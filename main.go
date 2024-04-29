@@ -324,14 +324,15 @@ func readPayments(rows [][]interface{}) ([]*Payment, error) {
 			// we will consider the row as being empty and skip it
 			continue
 		}
-		if dueDateIndex > len(row)-1 {
-			return nil, fmt.Errorf("can not read due date (column=%d) in row %d", dueDateIndex, idx)
-		}
-		if paymentDateIndex > len(row)-1 {
-			return nil, fmt.Errorf("can not read payment date (column=%d) in row %d", paymentDateIndex, idx)
-		}
 
 		description := row[descriptionIndex].(string)
+
+		if dueDateIndex > len(row)-1 {
+			return nil, fmt.Errorf("can not read due date for %s (column=%d) in row %d", description, dueDateIndex, idx)
+		}
+		if paymentDateIndex > len(row)-1 {
+			return nil, fmt.Errorf("can not read payment date for %s (column=%d) in row %d", description, paymentDateIndex, idx)
+		}
 
 		if dueDateIndex >= 0 {
 			dueDate = row[dueDateIndex].(string)
