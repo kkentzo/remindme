@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"sort"
 	"strings"
 	"time"
 
@@ -116,7 +117,7 @@ func run(config *Config, jwtcfg *jwt.Config, print bool) error {
 	if summary := SummarizePaymentsForToday(payments); summary != "" {
 		sections = append(sections, summary)
 	}
-	if summary := SummarizePaymentsComingUp(payments, 2); summary != "" {
+	if summary := SummarizePaymentsComingUp(payments); summary != "" {
 		sections = append(sections, summary)
 	}
 	if summary := SummarizeTotalPayments(payments, 30); summary != "" {
@@ -214,27 +215,46 @@ func SummarizePaymentsForToday(payments []*Payment) string {
 	return "😎 Nothing for today"
 }
 
-func SummarizePaymentsComingUp(payments []*Payment, timeWindowInDays int) string {
-	comingUp := []*Payment{}
+func SummarizePaymentsComingUp(payments []*Payment) string {
+	futurePayments := []*Payment{}
+	now := time.Now()
+
 	for _, p := range payments {
-		// skip non-due payments
-		if !p.IsDue() {
+		if p.due.IsZero() {
 			continue
 		}
-		d := p.DiffFromNowInDays(time.Now())
-		if d >= 1 && d <= timeWindowInDays {
+		if p.DiffFromNowInDays(now) > 0 {
+			futurePayments = append(futurePayments, p)
+		}
+	}
+
+	sort.Slice(futurePayments, func(i, j int) bool {
+		return futurePayments[i].due.Before(futurePayments[j].due)
+	})
+
+	if len(futurePayments) == 0 {
+		return fmt.Sprint("😎 Nothing coming up")
+	}
+
+	// figure out next payment due date and corresponding payments
+	nextTs := time.Time{}
+	comingUp := []*Payment{}
+
+	for _, p := range futurePayments {
+		if nextTs.IsZero() {
+			nextTs = p.due
+			comingUp = append(comingUp, p)
+		} else if p.DiffFromNowInDays(nextTs) == 0 {
 			comingUp = append(comingUp, p)
 		}
 	}
-	if len(comingUp) > 0 {
-		message := fmt.Sprintf("⏳ Coming Up (next %d days): ", timeWindowInDays)
-		descriptions := []string{}
-		for _, p := range comingUp {
-			descriptions = append(descriptions, fmt.Sprintf("%s", p.description))
-		}
-		return message + strings.Join(descriptions, ", ")
+
+	message := fmt.Sprintf("⏳ Coming Up (%s): ", nextTs.Format("2006-01-02"))
+	descriptions := []string{}
+	for _, p := range comingUp {
+		descriptions = append(descriptions, fmt.Sprintf("%s", p.description))
 	}
-	return fmt.Sprintf("😎 Nothing coming up (next %d days)", timeWindowInDays)
+	return message + strings.Join(descriptions, ", ")
 }
 
 func SummarizeTotalPayments(payments []*Payment, timeWindowInDays int) string {

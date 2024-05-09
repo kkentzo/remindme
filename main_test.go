@@ -14,6 +14,34 @@ func timeFromDate(t *testing.T, date string) time.Time {
 	return d
 }
 
+func Test_PaymentsComingUp(t *testing.T) {
+	day := 24 * time.Hour
+
+	now := time.Now()
+	future := now.Add(10 * day)
+	past := now.Add(-10 * day)
+
+	payments := []*Payment{
+		NewPayment("foo").WithDueDate(now),
+		NewPayment("bar1").WithDueDate(future),
+		NewPayment("bar2").WithDueDate(future),
+		NewPayment("bar3").WithDueDate(future.Add(day)),
+		NewPayment("baz").WithDueDate(past),
+		NewPayment("baz2").WithDueDate(past),
+		NewPayment("null"),
+	}
+
+	msg := SummarizePaymentsComingUp(payments)
+	assert.Contains(t, msg, future.Format("2006-01-02"))
+	assert.Contains(t, msg, "bar1")
+	assert.Contains(t, msg, "bar2")
+	assert.NotContains(t, msg, "bar3")
+
+	assert.NotContains(t, msg, "foo")
+	assert.NotContains(t, msg, "baz")
+	assert.NotContains(t, msg, "nul")
+}
+
 func Test_Payment_DiffFromToday(t *testing.T) {
 	kases := []struct {
 		now  string
