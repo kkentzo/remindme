@@ -111,10 +111,10 @@ func run(config *Config, jwtcfg *jwt.Config, print bool) error {
 
 	// formulate payment report
 	sections := []string{}
-	if summary := SummarizeDelayedPayments(payments); summary != "" {
+	if summary := SummarizePaymentsForToday(payments); summary != "" {
 		sections = append(sections, summary)
 	}
-	if summary := SummarizePaymentsForToday(payments); summary != "" {
+	if summary := SummarizeDelayedPayments(payments); summary != "" {
 		sections = append(sections, summary)
 	}
 	if summary := SummarizePaymentsComingUp(payments); summary != "" {
